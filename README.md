@@ -6,38 +6,37 @@
 
 A live Excalidraw canvas controlled by AI agents via MCP Streamable HTTP. Fork of [yctimlin/mcp_excalidraw](https://github.com/yctimlin/mcp_excalidraw) with a completely different architecture.
 
-## How It Differs From Upstream
-
-| | **Upstream** | **mcp-excalidraw-live** |
-|---|---|---|
-| Architecture | 2 processes (canvas + stdio MCP) with REST bridge | Single process, everything-in-one |
-| MCP Transport | stdio (client spawns a node process) | **Streamable HTTP** (`POST /mcp`) |
-| MCP SDK | Handwritten JSON-RPC | Official `@modelcontextprotocol/sdk` |
-| Canvas state | Server-side in-memory | **Browser-side** (localStorage persistence) |
-| Runtime | Node.js + npm | **Bun** |
-| Stack | React 18, Express 4, Vite 6, Zod 3 | **React 19, Express 5, Vite 8, Zod 4, TS 5.9** |
-
 ## Quick Start
 
-### Local
+### 1. Run the server
+
+**Docker (recommended):**
 
 ```bash
-bun install
-bun run build
-bun dist/server.js
+docker run -d -p 3000:3000 --name mcp-excalidraw-live \
+  ghcr.io/frankhommers/mcp-excalidraw-live:latest
 ```
 
-Open `http://localhost:3000` — that's your canvas.
-
-### Docker
+**Or with docker compose** (adds `save_canvas` support via home directory mount):
 
 ```bash
+curl -O https://raw.githubusercontent.com/frankhommers/mcp-excalidraw-live/main/docker-compose.yml
 docker compose up -d
 ```
 
-Open `http://localhost:3000`.
+**Or locally with Bun:**
 
-### Configure Your MCP Client
+```bash
+git clone https://github.com/frankhommers/mcp-excalidraw-live.git
+cd mcp-excalidraw-live
+bun install && bun run build && bun dist/server.js
+```
+
+### 2. Open the canvas
+
+Go to `http://localhost:3000` in your browser. Click the pin icon to lock this tab as the MCP target.
+
+### 3. Connect your MCP client
 
 Add to your MCP client config (Claude Desktop, Claude Code, Cursor, etc.):
 
@@ -51,7 +50,18 @@ Add to your MCP client config (Claude Desktop, Claude Code, Cursor, etc.):
 }
 ```
 
-That's it. No stdio, no spawning processes, just a URL.
+No stdio, no spawning processes, just a URL.
+
+## How It Differs From Upstream
+
+| | **Upstream** | **mcp-excalidraw-live** |
+|---|---|---|
+| Architecture | 2 processes (canvas + stdio MCP) with REST bridge | Single process, everything-in-one |
+| MCP Transport | stdio (client spawns a node process) | **Streamable HTTP** (`POST /mcp`) |
+| MCP SDK | Handwritten JSON-RPC | Official `@modelcontextprotocol/sdk` |
+| Canvas state | Server-side in-memory | **Browser-side** (localStorage persistence) |
+| Runtime | Node.js + npm | **Bun** |
+| Stack | React 18, Express 4, Vite 6, Zod 3 | **React 19, Express 5, Vite 8, Zod 4, TS 5.9** |
 
 ## MCP Tools (21)
 
@@ -74,9 +84,9 @@ That's it. No stdio, no spawning processes, just a URL.
 - **Docker with host path translation** — `save_canvas` works transparently in Docker via volume mount
 - **iPad/tablet support** — works on any device with a browser
 
-## Docker Details
+## Save to Disk (Docker)
 
-The `docker-compose.yml` mounts your home directory so `save_canvas` can write files:
+When using `docker compose`, your home directory is mounted so `save_canvas` works with normal paths:
 
 ```yaml
 volumes:
@@ -86,17 +96,15 @@ environment:
   - HOST_HOME_PATH=${HOME}
 ```
 
-The agent uses normal paths (e.g. `/Users/frank/Documents/diagram`), the server translates them to the container mount. Paths outside your home directory are rejected.
+The agent uses normal paths (e.g. `/Users/frank/Documents/diagram`), the server translates them. Paths outside your home directory are rejected.
 
-Custom port:
-
-```bash
-HOST_PORT=8080 docker compose up -d
-```
+When using `docker run` without the volume mount, use `export_canvas` instead — it returns the data and lets the MCP client write the file.
 
 ## Development
 
 ```bash
+git clone https://github.com/frankhommers/mcp-excalidraw-live.git
+cd mcp-excalidraw-live
 bun install
 bun run dev        # concurrent: tsc --watch + vite dev server
 bun run type-check # typecheck without emitting
