@@ -526,8 +526,11 @@ function createMcpServer(): McpServer {
     }
   });
 
-  // -- save_canvas --
-  mcpServer.registerTool('save_canvas', {
+  // -- save_canvas -- (only when filesystem is accessible)
+  const isContainer = fs.existsSync('/.dockerenv');
+  const canSaveToDisk = !isContainer || !!HOST_HOME_MOUNT;
+
+  if (canSaveToDisk) mcpServer.registerTool('save_canvas', {
     description: 'Save the canvas to disk. Supports .excalidraw (native), .png, and .svg formats. Extension is added automatically.',
     inputSchema: {
       filename_without_extension: z.string().describe('Full path without extension, e.g. /Users/frank/Documents/my-diagram'),
