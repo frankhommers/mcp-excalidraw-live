@@ -1,8 +1,7 @@
 {
   "mcpServers": {
-    "mcp_excalidraw": {
-      "command": "npx",
-      "args": ["-y", "excalidraw-mcp"]
+    "mcp-excalidraw-live": {
+      "url": "http://localhost:3000/mcp"
     }
   }
 }

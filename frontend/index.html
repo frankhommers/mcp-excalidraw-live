@@ -3,277 +3,117 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Excalidraw POC - Backend API Integration</title>
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>Excalidraw Canvas - MCP</title>
     <style>
+        :root {
+            --bg-panel: #1e1e1e;
+            --col-inactive: #555;
+            --col-active: #4ade80;      /* Server Connected (Green) */
+            --col-mcp-active: #3b82f6;  /* MCP Active (Blue) */
+            --col-pin-active: #fbbf24;  /* Pinned (Gold) */
+            --panel-border: rgba(255,255,255,0.1);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
         body {
             margin: 0;
             padding: 0;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
-            background-color: #f5f5f5;
+            overflow: hidden;
         }
-        
-        .header {
-            background: #fff;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            padding: 10px 20px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            gap: 10px;
+
+        .app {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
         }
-        
-        .header h1 {
-            margin: 0;
-            color: #333;
-            font-size: 24px;
+
+        /* Canvas fills entire viewport */
+        .canvas-container {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
         }
-        
-        .controls {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-        
-        button {
-            padding: 8px 16px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-            transition: background-color 0.2s;
-        }
-        
-        .btn-primary {
-            background-color: #007bff;
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            background-color: #0056b3;
-        }
-        
-        .btn-secondary {
-            background-color: #6c757d;
-            color: white;
-        }
-        
-        .btn-secondary:hover {
-            background-color: #545b62;
-        }
-        
-        .btn-success {
-            background-color: #28a745;
-            color: white;
-        }
-        
-        .btn-success:hover {
-            background-color: #218838;
-        }
-        
-        .btn-danger {
-            background-color: #dc3545;
-            color: white;
-        }
-        
-        .btn-danger:hover {
-            background-color: #c82333;
-        }
-        
-        .status {
+
+        /* MCP Status Bar - Integrated in Excalidraw top-right UI */
+        .mcp-status-bar {
             display: flex;
             align-items: center;
             gap: 8px;
-            font-size: 14px;
-        }
-        
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-        }
-        
-        .status-connected {
-            background-color: #28a745;
-        }
-        
-        .status-disconnected {
-            background-color: #dc3545;
-        }
-        
-        .canvas-container {
-            height: calc(100vh - 80px);
-            width: 100%;
-            position: relative;
-        }
-        
-        .api-panel {
-            position: fixed;
-            right: 20px;
-            top: 100px;
-            background: white;
+            padding: 4px 8px;
+            background: rgba(255, 255, 255, 0.9);
             border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-            padding: 20px;
-            width: 300px;
-            max-height: 400px;
-            overflow-y: auto;
-            z-index: 1000;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.1);
         }
-        
-        .api-panel h3 {
-            margin: 0 0 15px 0;
-            color: #333;
-            font-size: 18px;
-        }
-        
-        .api-form {
+
+        /* Status Item */
+        .mcp-status-item {
             display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-        
-        .form-group {
-            display: flex;
-            flex-direction: column;
-            gap: 5px;
-        }
-        
-        label {
-            font-weight: 500;
-            color: #555;
-            font-size: 14px;
-        }
-        
-        input, select {
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 14px;
-        }
-        
-        .form-row {
-            display: flex;
-            gap: 10px;
-        }
-        
-        .form-row .form-group {
-            flex: 1;
-        }
-        
-        .toggle-panel {
-            position: fixed;
-            right: 20px;
-            top: 60px;
-            background: #007bff;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            padding: 10px;
-            cursor: pointer;
-            font-size: 14px;
-            z-index: 1001;
-        }
-        
-        .api-panel.hidden {
-            display: none;
-        }
-        
-        .notification {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            padding: 12px 16px;
-            border-radius: 4px;
-            color: white;
-            font-size: 14px;
-            z-index: 1002;
-            animation: slideIn 0.3s ease;
-        }
-        
-        .notification.success {
-            background-color: #28a745;
-        }
-        
-        .notification.error {
-            background-color: #dc3545;
-        }
-        
-        @keyframes slideIn {
-            from {
-                transform: translateX(100%);
-                opacity: 0;
-            }
-            to {
-                transform: translateX(0);
-                opacity: 1;
-            }
-        }
-        
-        .element-count {
-            font-size: 14px;
-            color: #666;
-        }
-        
-        .loading {
-            display: flex;
+            align-items: center;
             justify-content: center;
-            align-items: center;
-            height: 100%;
-            font-size: 16px;
+            width: 24px;
+            height: 24px;
+            color: var(--col-inactive);
+            transition: color 0.2s ease;
+        }
+
+        .mcp-status-item svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+        }
+
+        .mcp-status-item:hover {
             color: #666;
         }
-        
-        .loading-content {
-            text-align: center;
+
+        /* States */
+        .mcp-status-item.active-server {
+            color: var(--col-active);
         }
-        
-        .loading-content div:first-child {
-            margin-bottom: 10px;
-        }
-        
-        /* Sync Controls Styles */
-        .sync-controls {
-            display: flex;
-            align-items: center;
-            gap: 10px;
+        .mcp-status-item.active-server svg {
+            filter: drop-shadow(0 0 3px rgba(74, 222, 128, 0.4));
         }
 
-        .btn-loading {
-            position: relative;
+        .mcp-status-item.active-mcp {
+            color: var(--col-mcp-active);
+        }
+        .mcp-status-item.active-mcp svg {
+            filter: drop-shadow(0 0 4px rgba(59, 130, 246, 0.5));
         }
 
-        .spinner {
-            display: inline-block;
-            width: 12px;
-            height: 12px;
-            border: 2px solid #ffffff40;
-            border-top: 2px solid #ffffff;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin-right: 5px;
+        .mcp-status-item.active-pin {
+            color: var(--col-pin-active);
+        }
+        .mcp-status-item.active-pin svg {
+            filter: drop-shadow(0 0 4px rgba(251, 191, 36, 0.5));
         }
 
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        .sync-status {
+        /* Clear Button */
+        .mcp-clear-btn {
+            background: transparent;
+            color: #666;
+            border: 1px solid #ddd;
+            padding: 4px 10px;
+            border-radius: 6px;
             font-size: 12px;
-            min-width: 100px;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-left: 4px;
         }
 
-        .sync-success {
-            color: #4caf50;
-        }
-
-        .sync-error {
-            color: #f44336;
-        }
-
-        .sync-time {
-            color: #666;
+        .mcp-clear-btn:hover {
+            background: #f5f5f5;
+            color: #333;
+            border-color: #ccc;
         }
     </style>
 </head>

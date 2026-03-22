@@ -19,3 +19,8 @@ public/dist/
 *.excalidraw
 
 docs/
+
+# Package manager lockfiles (keep bun.lock)
+package-lock.json
+yarn.lock
+.agent-session-logs

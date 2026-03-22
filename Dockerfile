@@ -1,58 +1,60 @@
 # Dockerfile for MCP Excalidraw Server
-# This builds the MCP server only (core product for CI/CD and GHCR)
-# The canvas server is optional and runs separately
+# Builds and runs the combined canvas + MCP server using Bun
 
-# Stage 1: Build backend (TypeScript compilation)
-FROM node:18-slim AS builder
+# Stage 1: Build
+FROM oven/bun:1 AS builder
 
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
+COPY package.json bun.lock ./
 
-# Install all dependencies (including TypeScript compiler)
-RUN npm ci && npm cache clean --force
+# Install all dependencies
+RUN bun install --frozen-lockfile
 
-# Copy backend source
+# Copy source
 COPY src ./src
-COPY tsconfig.json ./
+COPY frontend ./frontend
+COPY tsconfig.json vite.config.js ./
 
-# Compile TypeScript
-RUN npm run build:server
+# Build everything
+RUN bun run build
 
-# Stage 2: Production MCP Server
-FROM node:18-slim AS production
+# Stage 2: Production
+FROM oven/bun:1-slim AS production
 
-# Create non-root user for security
-RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 --gid 1001 nodejs
+# Create non-root user
+RUN groupadd --system --gid 1001 appuser && \
+    useradd --system --uid 1001 --gid 1001 --no-create-home appuser
 
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
+COPY package.json bun.lock ./
 
-# Install only production dependencies
-RUN npm ci --only=production && npm cache clean --force
+# Install production dependencies only
+RUN bun install --frozen-lockfile --production
 
-# Copy compiled backend (MCP server only)
+# Copy built files
 COPY --from=builder /app/dist ./dist
 
-# Set ownership to nodejs user
-RUN chown -R nodejs:nodejs /app
+# Set ownership
+RUN chown -R appuser:appuser /app
 
-# Switch to non-root user
-USER nodejs
+USER appuser
 
-# Set environment variables with defaults
+# Environment
 ENV NODE_ENV=production
-ENV EXPRESS_SERVER_URL=http://localhost:3000
-ENV ENABLE_CANVAS_SYNC=true
+ENV PORT=3000
+ENV HOST=0.0.0.0
 
-# Run MCP server (stdin/stdout protocol)
-CMD ["node", "dist/index.js"]
+# Expose port
+EXPOSE 3000
 
-# Labels for metadata
-LABEL org.opencontainers.image.source="https://github.com/yctimlin/mcp_excalidraw"
-LABEL org.opencontainers.image.description="MCP Excalidraw Server - Model Context Protocol for AI agents"
+# Run server
+CMD ["bun", "dist/server.js"]
+
+# Labels
+LABEL org.opencontainers.image.source="https://github.com/frankhommers/mcp-excalidraw-live"
+LABEL org.opencontainers.image.description="mcp-excalidraw-live — Live Excalidraw canvas with MCP Streamable HTTP"
 LABEL org.opencontainers.image.licenses="MIT"

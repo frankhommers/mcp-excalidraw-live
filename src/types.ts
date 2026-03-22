@@ -85,7 +85,7 @@ export interface ExcalidrawFreedrawElement extends ExcalidrawElementBase {
   lastCommittedPoint?: readonly [number, number] | null;
 }
 
-export type ExcalidrawElement = 
+export type ExcalidrawElement =
   | ExcalidrawTextElement
   | ExcalidrawRectangleElement
   | ExcalidrawEllipseElement
@@ -155,65 +155,101 @@ export interface ElementResponse extends ApiResponse {
   element: ServerElement;
 }
 
-export interface SyncResponse extends ApiResponse {
-  count: number;
-  syncedAt: string;
-  beforeCount: number;
-  afterCount: number;
-}
+// WebSocket message types for MCP operations
+export type WebSocketMessageType =
+  | 'mermaid_convert'
+  | 'export_canvas_request'
+  | 'save_canvas_request'
+  | 'mcp_create_element'
+  | 'mcp_update_element'
+  | 'mcp_delete_element'
+  | 'mcp_query_elements'
+  | 'mcp_batch_create'
+  | 'mcp_clear_canvas'
+  | 'mcp_get_element'
+  | 'mcp_set_viewport'
+  | 'mcp_align_elements'
+  | 'mcp_distribute_elements'
+  | 'mcp_group_elements'
+  | 'mcp_operation_response'
+  | 'active_status'
+  | 'pin_status'
+  | 'export_to_excalidraw_url'
+  | 'client_focus'
+  | 'client_pin';
 
-// WebSocket message types
 export interface WebSocketMessage {
   type: WebSocketMessageType;
   [key: string]: any;
 }
 
-export type WebSocketMessageType = 
-  | 'initial_elements'
-  | 'element_created'
-  | 'element_updated'
-  | 'element_deleted'
-  | 'elements_batch_created'
-  | 'elements_synced'
-  | 'sync_status'
-  | 'mermaid_convert';
-
-export interface InitialElementsMessage extends WebSocketMessage {
-  type: 'initial_elements';
-  elements: ServerElement[];
-}
-
-export interface ElementCreatedMessage extends WebSocketMessage {
-  type: 'element_created';
+// MCP Operation messages (server -> browser)
+export interface McpCreateElementMessage extends WebSocketMessage {
+  type: 'mcp_create_element';
+  requestId: string;
   element: ServerElement;
 }
 
-export interface ElementUpdatedMessage extends WebSocketMessage {
-  type: 'element_updated';
-  element: ServerElement;
+export interface McpUpdateElementMessage extends WebSocketMessage {
+  type: 'mcp_update_element';
+  requestId: string;
+  elementId: string;
+  updates: Partial<ServerElement>;
 }
 
-export interface ElementDeletedMessage extends WebSocketMessage {
-  type: 'element_deleted';
+export interface McpDeleteElementMessage extends WebSocketMessage {
+  type: 'mcp_delete_element';
+  requestId: string;
   elementId: string;
 }
 
-export interface BatchCreatedMessage extends WebSocketMessage {
-  type: 'elements_batch_created';
+export interface McpQueryElementsMessage extends WebSocketMessage {
+  type: 'mcp_query_elements';
+  requestId: string;
+  filter?: {
+    type?: ExcalidrawElementType;
+    [key: string]: any;
+  };
+}
+
+export interface McpBatchCreateMessage extends WebSocketMessage {
+  type: 'mcp_batch_create';
+  requestId: string;
   elements: ServerElement[];
 }
 
-export interface SyncStatusMessage extends WebSocketMessage {
-  type: 'sync_status';
-  elementCount: number;
+// MCP Operation response (browser -> server)
+export interface McpOperationResponseMessage extends WebSocketMessage {
+  type: 'mcp_operation_response';
+  requestId: string;
+  success: boolean;
+  data?: any;
+  error?: string;
+}
+
+// Active status message (server -> browser)
+export interface ActiveStatusMessage extends WebSocketMessage {
+  type: 'active_status';
+  isActive: boolean;
+}
+
+// Client focus message (browser -> server)
+export interface ClientFocusMessage extends WebSocketMessage {
+  type: 'client_focus';
   timestamp: string;
 }
 
-export interface MermaidConvertMessage extends WebSocketMessage {
-  type: 'mermaid_convert';
-  mermaidDiagram: string;
-  config?: MermaidConfig;
-  timestamp: string;
+// Client pin message (browser -> server)
+export interface ClientPinMessage extends WebSocketMessage {
+  type: 'client_pin';
+  pinned: boolean;
+}
+
+// Pin status message (server -> browser)
+export interface PinStatusMessage extends WebSocketMessage {
+  type: 'pin_status';
+  isPinned: boolean;
+  isActive: boolean;
 }
 
 // Mermaid conversion types
@@ -229,6 +265,13 @@ export interface MermaidConfig {
   maxTextSize?: number;
 }
 
+export interface MermaidConvertMessage extends WebSocketMessage {
+  type: 'mermaid_convert';
+  mermaidDiagram: string;
+  config?: MermaidConfig;
+  timestamp: string;
+}
+
 export interface MermaidConversionRequest {
   mermaidDiagram: string;
   config?: MermaidConfig;
@@ -240,14 +283,18 @@ export interface MermaidConversionResponse extends ApiResponse {
   count: number;
 }
 
-// In-memory storage for Excalidraw elements
-export const elements = new Map<string, ServerElement>();
+// Export canvas request message
+export interface ExportCanvasRequestMessage extends WebSocketMessage {
+  type: 'export_canvas_request';
+  requestId: string;
+  format: 'png' | 'svg';
+}
 
 // Validation function for Excalidraw elements
 export function validateElement(element: Partial<ServerElement>): element is ServerElement {
   const requiredFields: (keyof ServerElement)[] = ['type', 'x', 'y'];
   const hasRequiredFields = requiredFields.every(field => field in element);
-  
+
   if (!hasRequiredFields) {
     throw new Error(`Missing required fields: ${requiredFields.join(', ')}`);
   }

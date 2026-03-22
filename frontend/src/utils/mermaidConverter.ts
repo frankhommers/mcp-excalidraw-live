@@ -1,6 +1,7 @@
-import { parseMermaidToExcalidraw, MermaidConfig } from '@excalidraw/mermaid-to-excalidraw';
-import type { ExcalidrawElement } from '@excalidraw/excalidraw/types/element/types';
-import type { BinaryFiles } from '@excalidraw/excalidraw/types/types';
+import { parseMermaidToExcalidraw } from '@excalidraw/mermaid-to-excalidraw';
+import type { MermaidConfig } from '@excalidraw/mermaid-to-excalidraw';
+import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types';
+import type { BinaryFiles } from '@excalidraw/excalidraw/types';
 
 export interface MermaidConversionResult {
   elements: readonly ExcalidrawElement[];
