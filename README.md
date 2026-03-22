@@ -14,10 +14,13 @@ A live Excalidraw canvas controlled by AI agents via MCP Streamable HTTP. Fork o
 
 ```bash
 docker run -d -p 3000:3000 --name mcp-excalidraw-live \
+  -v $HOME:/host_home \
+  -e HOST_HOME_MOUNT=/host_home \
+  -e HOST_HOME_PATH=$HOME \
   ghcr.io/frankhommers/mcp-excalidraw-live:latest
 ```
 
-**Or with docker compose** (adds `save_canvas` support via home directory mount):
+**Or with docker compose** (same thing, less typing):
 
 ```bash
 curl -O https://raw.githubusercontent.com/frankhommers/mcp-excalidraw-live/main/docker-compose.yml
@@ -98,7 +101,7 @@ environment:
 
 The agent uses normal paths (e.g. `/Users/frank/Documents/diagram`), the server translates them. Paths outside your home directory are rejected.
 
-When using `docker run` without the volume mount, use `export_canvas` instead — it returns the data and lets the MCP client write the file.
+Without the volume mount, `save_canvas` won't work — use `export_canvas` instead (returns data, MCP client writes the file).
 
 ## Development
 
