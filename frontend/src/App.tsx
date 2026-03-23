@@ -178,6 +178,11 @@ function App(): React.JSX.Element {
   const [isSharing, setIsSharing] = useState<boolean>(false)
   const [shareSuccess, setShareSuccess] = useState<boolean>(false)
   const [shareUrl, setShareUrl] = useState<string | null>(null)
+  const [isFineliner, setIsFineliner] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('excalidraw-fineliner-mode') === 'true'
+    } catch { return false }
+  })
 
   // Use ref to always have latest API in callbacks
   const excalidrawAPIRef = useRef<ExcalidrawAPIRefValue | null>(null)
@@ -843,6 +848,95 @@ function App(): React.JSX.Element {
     sendMessage({ type: 'client_pin', pinned: newPinned })
   }
 
+  // Fineliner defaults
+  const FINELINER_STROKE_WIDTH = 0.5
+  const FINELINER_ROUGHNESS = 0
+  const DEFAULT_STROKE_WIDTH = 2
+  const DEFAULT_ROUGHNESS = 1
+
+  // Toggle fineliner mode
+  const toggleFineliner = useCallback(() => {
+    const api = excalidrawAPIRef.current
+    if (!api) return
+
+    const next = !isFineliner
+    setIsFineliner(next)
+    try { localStorage.setItem('excalidraw-fineliner-mode', String(next)) } catch {}
+
+    if (next) {
+      api.setActiveTool({ type: 'freedraw' })
+      api.updateScene({
+        appState: {
+          currentItemStrokeWidth: FINELINER_STROKE_WIDTH,
+          currentItemRoughness: FINELINER_ROUGHNESS,
+        },
+      })
+    } else {
+      api.setActiveTool({ type: 'selection' })
+      api.updateScene({
+        appState: {
+          currentItemStrokeWidth: DEFAULT_STROKE_WIDTH,
+          currentItemRoughness: DEFAULT_ROUGHNESS,
+        },
+      })
+    }
+  }, [isFineliner])
+
+  // Apply fineliner settings on initial load if it was persisted
+  useEffect(() => {
+    if (isFineliner && excalidrawAPI) {
+      excalidrawAPI.setActiveTool({ type: 'freedraw' })
+      excalidrawAPI.updateScene({
+        appState: {
+          currentItemStrokeWidth: FINELINER_STROKE_WIDTH,
+          currentItemRoughness: FINELINER_ROUGHNESS,
+        },
+      })
+    }
+  }, [excalidrawAPI]) // only on API ready
+
+  // Track which freedraw elements we've already patched
+  const patchedFreeDrawIds = useRef<Set<string>>(new Set())
+
+  // Detect when user switches away from freedraw tool — deactivate fineliner
+  const handleOnChange = useCallback((elements: readonly ExcalidrawElement[], appState: AppState) => {
+    setIsDarkMode(appState.theme === 'dark')
+
+    // If fineliner is on but user switched to another tool, turn it off
+    if (isFineliner && appState.activeTool?.type !== 'freedraw') {
+      setIsFineliner(false)
+      try { localStorage.setItem('excalidraw-fineliner-mode', 'false') } catch {}
+    }
+
+    // Patch new freedraw elements: disable simulatePressure for round caps
+    if (isFineliner) {
+      const api = excalidrawAPIRef.current
+      if (api) {
+        const needsPatch = elements.filter(
+          (el) => el.type === 'freedraw'
+            && (el as any).simulatePressure === true
+            && !patchedFreeDrawIds.current.has(el.id)
+        )
+        if (needsPatch.length > 0) {
+          const updatedElements = elements.map((el) => {
+            if (el.type === 'freedraw' && (el as any).simulatePressure === true && !patchedFreeDrawIds.current.has(el.id)) {
+              patchedFreeDrawIds.current.add(el.id)
+              return { ...el, simulatePressure: false }
+            }
+            return el
+          })
+          api.updateScene({ elements: updatedElements as any })
+        }
+      }
+    }
+
+    // Debounced save to localStorage
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => {
+      saveToLocalStorage(elements, appState)
+    }, SAVE_DEBOUNCE_MS)
+  }, [isFineliner])
+
   // SVG Icons - fixed size
   const iconSvgStyle: React.CSSProperties = { width: '18px', height: '18px', fill: 'currentColor' }
   const CloudOn = () => (
@@ -869,6 +963,11 @@ function App(): React.JSX.Element {
   const PinOff = () => (
     <svg viewBox="0 0 24 24" style={iconSvgStyle}>
       <path d="M2,5.27L3.28,4L20,20.72L18.73,22L12.8,16.07V22H11.2V16H6V14L8,12V11.27L2,5.27M16,12L18,14V16H17.82L8,6.18V4H7V2H17V4H16V12Z" />
+    </svg>
+  )
+  const FinelinerIcon = () => (
+    <svg viewBox="0 0 24 24" style={iconSvgStyle}>
+      <path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75L3 17.25z" />
     </svg>
   )
   const ShareIcon = () => (
@@ -970,6 +1069,23 @@ function App(): React.JSX.Element {
           onClick={handlePinClick}
         >
           {isPinned ? <PinOn /> : <PinOff />}
+        </div>
+        {/* Fineliner */}
+        <div
+          style={{
+            ...iconStyle,
+            color: isFineliner ? '#3b82f6' : inactiveColor,
+            cursor: 'pointer',
+            background: isFineliner ? (isDarkMode ? 'rgba(59,130,246,0.15)' : 'rgba(59,130,246,0.1)') : 'transparent',
+            borderRadius: '4px',
+            width: '28px',
+            height: '28px',
+            transition: 'all 0.15s ease',
+          }}
+          title={isFineliner ? 'Fineliner active — click to deactivate' : 'Activate fineliner (thin, smooth pen)'}
+          onClick={toggleFineliner}
+        >
+          <FinelinerIcon />
         </div>
         {/* Share */}
         <div
@@ -1097,14 +1213,7 @@ function App(): React.JSX.Element {
           excalidrawAPI={(api: ExcalidrawAPIRefValue) => setExcalidrawAPI(api)}
           initialData={restoredData}
           renderTopRightUI={renderTopRightUI}
-          onChange={(elements, appState) => {
-            setIsDarkMode(appState.theme === 'dark')
-            // Debounced save to localStorage
-            if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-            saveTimerRef.current = setTimeout(() => {
-              saveToLocalStorage(elements, appState)
-            }, SAVE_DEBOUNCE_MS)
-          }}
+          onChange={handleOnChange}
         >
           <MainMenu>
             <MainMenu.DefaultItems.LoadScene />
