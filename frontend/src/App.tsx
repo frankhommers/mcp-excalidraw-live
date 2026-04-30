@@ -3,6 +3,7 @@ import {
   Excalidraw,
   MainMenu,
   convertToExcalidrawElements,
+  restoreElements,
   CaptureUpdateAction,
   exportToBlob,
   exportToSvg,
@@ -117,6 +118,27 @@ interface ServerElement {
   locked?: boolean;
 }
 
+interface SessionInfo {
+  sessionId: string;
+  clientName?: string;
+  clientVersion?: string;
+  purpose: string;
+  createdAt: string;
+}
+
+interface CanvasInfo {
+  canvasId: string;
+  name: string;
+  createdAt: string;
+}
+
+interface GrantInfo {
+  sessionId: string;
+  canvasId: string;
+  grantedAt: string;
+  session: SessionInfo;
+}
+
 interface WebSocketMessage {
   type: string;
   element?: ServerElement;
@@ -138,6 +160,15 @@ interface WebSocketMessage {
   alignment?: string;
   direction?: string;
   action?: string;
+  // v3 multi-canvas
+  canvasId?: string;
+  name?: string;
+  canvas?: CanvasInfo;
+  pendingSessions?: SessionInfo[];
+  grants?: GrantInfo[];
+  session?: SessionInfo;
+  grant?: GrantInfo;
+  sessionId?: string;
 }
 
 const cleanElementForExcalidraw = (element: ServerElement): ExcalidrawElementSkeleton => {
@@ -168,21 +199,58 @@ const validateAndFixBindings = (elements: ExcalidrawElementSkeleton[]): Excalidr
   });
 }
 
+// convertToExcalidrawElements strips startBinding/endBinding/boundElements props.
+// Restore them from original elements after conversion. Required for snapshot restore
+// and for arrows created via API with startBinding/endBinding fields.
+const restoreBindings = (
+  convertedElements: readonly any[],
+  originalElements: any[]
+): any[] => {
+  const originalMap = new Map<string, any>();
+  for (const el of originalElements) {
+    if (el.id) originalMap.set(el.id, el);
+  }
+  return convertedElements.map((el: any) => {
+    const orig = originalMap.get(el.id);
+    if (!orig) return el;
+    const patched = { ...el };
+    if (orig.startBinding && !el.startBinding) patched.startBinding = orig.startBinding;
+    if (orig.endBinding && !el.endBinding) patched.endBinding = orig.endBinding;
+    if (orig.boundElements && (!el.boundElements || el.boundElements.length === 0)) {
+      patched.boundElements = orig.boundElements;
+    }
+    if (orig.elbowed !== undefined && el.elbowed === undefined) patched.elbowed = orig.elbowed;
+    return patched;
+  });
+}
+
 function App(): React.JSX.Element {
   const [excalidrawAPI, setExcalidrawAPI] = useState<ExcalidrawAPIRefValue | null>(null)
   const [isConnected, setIsConnected] = useState<boolean>(false)
   const [isMcpActive, setIsMcpActive] = useState<boolean>(false)
-  const [isPinned, setIsPinned] = useState<boolean>(false)
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false)
   const [isDarkMode, setIsDarkMode] = useState<boolean>(false)
   const [isSharing, setIsSharing] = useState<boolean>(false)
   const [shareSuccess, setShareSuccess] = useState<boolean>(false)
   const [shareUrl, setShareUrl] = useState<string | null>(null)
+  // v3 canvas/grant state
+  const [canvas, setCanvas] = useState<CanvasInfo | null>(null)
+  const [pendingSessions, setPendingSessions] = useState<SessionInfo[]>([])
+  const [activeGrants, setActiveGrants] = useState<GrantInfo[]>([])
+  const [activityLog, setActivityLog] = useState<{ id: string; sessionId: string; action: string; ts: number }[]>([])
+  const [isHeaderExpanded, setIsHeaderExpanded] = useState<boolean>(true)
+  const [isEditingName, setIsEditingName] = useState<boolean>(false)
+  const [nameDraft, setNameDraft] = useState<string>('')
   const [isFineliner, setIsFineliner] = useState<boolean>(() => {
     try {
       return localStorage.getItem('excalidraw-fineliner-mode') === 'true'
     } catch { return false }
   })
+  // Pending scene to load via remount (snapshot restore, scene import).
+  // When set, Excalidraw remounts with this as initialData — only reliable way
+  // to restore bindings/positions. Cleared after consumption.
+  const [pendingScene, setPendingScene] = useState<{ elements: readonly ExcalidrawElement[]; appState?: any; files?: any } | null>(null)
+  const [sceneVersion, setSceneVersion] = useState<number>(0)
 
   // Use ref to always have latest API in callbacks
   const excalidrawAPIRef = useRef<ExcalidrawAPIRefValue | null>(null)
@@ -255,11 +323,12 @@ function App(): React.JSX.Element {
       const currentElements = api.getSceneElements()
       const cleanedElement = cleanElementForExcalidraw(element)
       const convertedElements = convertToExcalidrawElements([cleanedElement], { regenerateIds: false })
+      const restoredElements = restoreBindings(convertedElements, [cleanedElement] as any[])
       api.updateScene({
-        elements: [...currentElements, ...convertedElements],
+        elements: [...currentElements, ...restoredElements],
         captureUpdate: CaptureUpdateAction.IMMEDIATELY
       })
-      sendMcpResponse(requestId, true, convertedElements[0])
+      sendMcpResponse(requestId, true, restoredElements[0])
       console.log('MCP: Created element', element.id)
     } catch (error) {
       sendMcpResponse(requestId, false, undefined, (error as Error).message)
@@ -339,11 +408,54 @@ function App(): React.JSX.Element {
       const cleanedElements = elements.map(cleanElementForExcalidraw)
       const validatedElements = validateAndFixBindings(cleanedElements)
       const convertedElements = convertToExcalidrawElements(validatedElements, { regenerateIds: false })
+      const restoredElements = restoreBindings(convertedElements, validatedElements as any[])
       api.updateScene({
-        elements: [...currentElements, ...convertedElements],
+        elements: [...currentElements, ...restoredElements],
         captureUpdate: CaptureUpdateAction.IMMEDIATELY
       })
-      sendMcpResponse(requestId, true, convertedElements)
+      sendMcpResponse(requestId, true, restoredElements)
+    } catch (error) {
+      sendMcpResponse(requestId, false, undefined, (error as Error).message)
+    }
+  }, [sendMcpResponse])
+
+  // Load full scene from .excalidraw JSON (snapshot restore, import).
+  // Forces a remount of Excalidraw with the scene as initialData — this is the
+  // only reliable way to restore bindings (especially bound arrow positions),
+  // because Excalidraw's binding system runs on mount, not on updateScene.
+  const handleMcpLoadScene = useCallback((requestId: string, sceneJson: string) => {
+    try {
+      const parsed = JSON.parse(sceneJson)
+      const rawElements = Array.isArray(parsed.elements) ? parsed.elements : []
+      const appState = parsed.appState || {}
+      const files = parsed.files || {}
+
+      // Convert long-form bindings to short-form so convertToExcalidrawElements
+      // re-resolves them and recomputes arrow coordinates.
+      const skeletonElements = rawElements.map((el: any) => {
+        if (el.type !== 'arrow') return el
+        const out: any = { ...el }
+        if (out.startBinding?.elementId) {
+          out.start = { id: out.startBinding.elementId }
+          delete out.startBinding
+        }
+        if (out.endBinding?.elementId) {
+          out.end = { id: out.endBinding.elementId }
+          delete out.endBinding
+        }
+        return out
+      })
+
+      const converted = convertToExcalidrawElements(skeletonElements, { regenerateIds: false })
+      const restored = restoreBindings(converted, rawElements)
+
+      setPendingScene({
+        elements: restored as readonly ExcalidrawElement[],
+        appState: { theme: appState.theme || 'light', viewBackgroundColor: appState.viewBackgroundColor || '#ffffff' },
+        files
+      })
+      setSceneVersion(v => v + 1)
+      sendMcpResponse(requestId, true, { loaded: restored.length })
     } catch (error) {
       sendMcpResponse(requestId, false, undefined, (error as Error).message)
     }
@@ -370,12 +482,27 @@ function App(): React.JSX.Element {
     }
 
     switch (data.type) {
-      case 'active_status':
-        // Just status update, no MCP activity
+      case 'canvas_assigned':
+        if (data.canvasId && data.name) {
+          setCanvas({ canvasId: data.canvasId, name: data.name, createdAt: new Date().toISOString() })
+        }
         break
 
-      case 'pin_status':
-        setIsPinned(data.isPinned || false)
+      case 'canvas_state':
+        if (data.canvas) setCanvas(data.canvas)
+        if (Array.isArray(data.pendingSessions)) setPendingSessions(data.pendingSessions)
+        if (Array.isArray(data.grants)) setActiveGrants(data.grants)
+        break
+
+      case 'activity':
+        if (data.sessionId && data.action) {
+          flashMcpActivity()
+          const id = Math.random().toString(36).substring(2)
+          setActivityLog(prev => [...prev, { id, sessionId: data.sessionId!, action: data.action!, ts: Date.now() }])
+          setTimeout(() => {
+            setActivityLog(prev => prev.filter(e => e.id !== id))
+          }, 2500)
+        }
         break
 
       case 'mcp_create_element':
@@ -410,6 +537,13 @@ function App(): React.JSX.Element {
         if (data.requestId && data.elements) {
           flashMcpActivity()
           handleMcpBatchCreate(data.requestId, data.elements)
+        }
+        break
+
+      case 'mcp_load_scene':
+        if (data.requestId && typeof (data as any).scene === 'string') {
+          flashMcpActivity()
+          handleMcpLoadScene(data.requestId, (data as any).scene)
         }
         break
 
@@ -772,7 +906,7 @@ function App(): React.JSX.Element {
         }
         break
     }
-  }, [flashMcpActivity, handleMcpCreateElement, handleMcpUpdateElement, handleMcpDeleteElement, handleMcpQueryElements, handleMcpBatchCreate, handleMcpClearCanvas])
+  }, [flashMcpActivity, handleMcpCreateElement, handleMcpUpdateElement, handleMcpDeleteElement, handleMcpQueryElements, handleMcpBatchCreate, handleMcpLoadScene, handleMcpClearCanvas])
 
   // WebSocket connection
   useEffect(() => {
@@ -841,12 +975,26 @@ function App(): React.JSX.Element {
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange)
   }, [])
 
-  // Handle pin button click
-  const handlePinClick = () => {
-    console.log('Pin clicked, current isPinned:', isPinned)
-    const newPinned = !isPinned
-    sendMessage({ type: 'client_pin', pinned: newPinned })
-  }
+  // Grant a pending session to this canvas
+  const handleGrant = useCallback((sessionId: string) => {
+    if (!canvas) return
+    sendMessage({ type: 'grant_request', sessionId, canvasId: canvas.canvasId })
+  }, [canvas, sendMessage])
+
+  // Revoke an existing grant on this canvas
+  const handleRevoke = useCallback((sessionId: string) => {
+    if (!canvas) return
+    sendMessage({ type: 'revoke_grant', sessionId, canvasId: canvas.canvasId })
+  }, [canvas, sendMessage])
+
+  // Save canvas rename
+  const commitName = useCallback(() => {
+    const trimmed = nameDraft.trim().slice(0, 100)
+    if (trimmed && canvas && trimmed !== canvas.name) {
+      sendMessage({ type: 'canvas_rename', name: trimmed })
+    }
+    setIsEditingName(false)
+  }, [nameDraft, canvas, sendMessage])
 
   // Fineliner defaults
   const FINELINER_STROKE_WIDTH = 0.5
@@ -1062,13 +1210,38 @@ function App(): React.JSX.Element {
         <div style={mcpIndicatorStyle} title={isMcpActive ? 'MCP Active' : 'MCP Idle'}>
           <McpIcon />
         </div>
-        {/* Pin */}
+        {/* Grants count + pending badge */}
         <div
-          style={{ ...iconStyle, color: getColor(isPinned, '#f59e0b'), cursor: 'pointer' }}
-          title={isPinned ? 'Click to unpin' : 'Click to pin'}
-          onClick={handlePinClick}
+          style={{
+            ...iconStyle,
+            color: activeGrants.length > 0 ? '#22c55e' : (pendingSessions.length > 0 ? '#f59e0b' : inactiveColor),
+            cursor: 'pointer',
+            position: 'relative',
+            width: '28px',
+          }}
+          title={`${activeGrants.length} agent(s), ${pendingSessions.length} pending`}
+          onClick={() => setIsHeaderExpanded(v => !v)}
         >
-          {isPinned ? <PinOn /> : <PinOff />}
+          {activeGrants.length > 0 ? <PinOn /> : <PinOff />}
+          {pendingSessions.length > 0 && (
+            <span style={{
+              position: 'absolute',
+              top: '-4px',
+              right: '-4px',
+              background: '#f59e0b',
+              color: '#fff',
+              fontSize: '10px',
+              fontWeight: 700,
+              borderRadius: '999px',
+              minWidth: '14px',
+              height: '14px',
+              padding: '0 3px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              lineHeight: 1,
+            }}>{pendingSessions.length}</span>
+          )}
         </div>
         {/* Fineliner */}
         <div
@@ -1207,11 +1380,146 @@ function App(): React.JSX.Element {
           >&times;</button>
         </div>
       )}
+      {/* Canvas grant header strip */}
+      {canvas && isHeaderExpanded && (activeGrants.length > 0 || pendingSessions.length > 0) && (
+        <div style={{
+          position: 'fixed',
+          top: '8px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 99998,
+          background: isDarkMode ? 'rgba(30,30,30,0.96)' : 'rgba(255,255,255,0.96)',
+          color: isDarkMode ? '#eee' : '#1e1e1e',
+          borderRadius: '10px',
+          boxShadow: isDarkMode ? '0 2px 12px rgba(0,0,0,0.5)' : '0 2px 12px rgba(0,0,0,0.15)',
+          padding: '10px 14px',
+          minWidth: '320px',
+          maxWidth: '90vw',
+          fontFamily: 'system-ui, -apple-system, sans-serif',
+          fontSize: '13px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+            <strong style={{ fontSize: '12px', textTransform: 'uppercase', opacity: 0.65 }}>Canvas:</strong>
+            {isEditingName ? (
+              <input
+                autoFocus
+                value={nameDraft}
+                onChange={e => setNameDraft(e.target.value)}
+                onBlur={commitName}
+                onKeyDown={e => { if (e.key === 'Enter') commitName(); if (e.key === 'Escape') setIsEditingName(false) }}
+                style={{
+                  flex: 1,
+                  padding: '2px 6px',
+                  border: '1px solid #3b82f6',
+                  borderRadius: '4px',
+                  background: isDarkMode ? '#1e1e1e' : '#fff',
+                  color: isDarkMode ? '#eee' : '#1e1e1e',
+                  fontSize: '13px',
+                }}
+              />
+            ) : (
+              <span
+                onClick={() => { setNameDraft(canvas.name); setIsEditingName(true) }}
+                style={{ cursor: 'pointer', borderBottom: '1px dotted #999' }}
+                title="Click to rename"
+              >{canvas.name}</span>
+            )}
+            <span style={{ marginLeft: 'auto', fontSize: '11px', opacity: 0.55 }}>{canvas.canvasId.substring(0, 8)}</span>
+            <button
+              onClick={() => setIsHeaderExpanded(false)}
+              style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: '16px', padding: '0 4px', opacity: 0.5 }}
+              title="Hide"
+            >&times;</button>
+          </div>
+
+          {activeGrants.length > 0 && (
+            <div style={{ marginTop: '6px' }}>
+              <div style={{ fontSize: '11px', opacity: 0.6, marginBottom: '3px' }}>Granted to:</div>
+              {activeGrants.map(g => (
+                <div key={g.sessionId} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '3px 0' }}>
+                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#22c55e' }} />
+                  <span style={{ fontWeight: 600 }}>{g.session.clientName || 'unknown'}</span>
+                  <span style={{ opacity: 0.5, fontSize: '11px' }}>({g.session.sessionId.substring(0, 8)})</span>
+                  <span style={{ flex: 1, fontStyle: 'italic', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {g.session.purpose ? `"${g.session.purpose}"` : ''}
+                  </span>
+                  <button
+                    onClick={() => handleRevoke(g.sessionId)}
+                    style={{ background: 'none', border: 'none', color: '#e03131', cursor: 'pointer', fontSize: '14px', padding: '0 4px' }}
+                    title="Revoke"
+                  >&times;</button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {pendingSessions.length > 0 && (
+            <div style={{ marginTop: '8px', paddingTop: '6px', borderTop: `1px solid ${isDarkMode ? '#333' : '#e5e5e5'}` }}>
+              <div style={{ fontSize: '11px', opacity: 0.6, marginBottom: '3px' }}>Pending requests:</div>
+              {pendingSessions.map(s => (
+                <div key={s.sessionId} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '3px 0' }}>
+                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', border: '1px solid #f59e0b' }} />
+                  <span style={{ fontWeight: 600 }}>{s.clientName || 'unknown'}</span>
+                  <span style={{ opacity: 0.5, fontSize: '11px' }}>({s.sessionId.substring(0, 8)})</span>
+                  <span style={{ flex: 1, fontStyle: 'italic', opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {s.purpose ? `"${s.purpose}"` : ''}
+                  </span>
+                  <button
+                    onClick={() => handleGrant(s.sessionId)}
+                    style={{
+                      background: '#22c55e',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '4px',
+                      padding: '3px 8px',
+                      cursor: 'pointer',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                    }}
+                    title="Grant access to this canvas"
+                  >Grant</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Activity toasts */}
+      {activityLog.length > 0 && (
+        <div style={{
+          position: 'fixed',
+          bottom: '20px',
+          right: '20px',
+          zIndex: 99997,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '4px',
+          pointerEvents: 'none',
+        }}>
+          {activityLog.slice(-5).map(e => (
+            <div key={e.id} style={{
+              background: isDarkMode ? 'rgba(34,197,94,0.15)' : 'rgba(34,197,94,0.1)',
+              color: isDarkMode ? '#86efac' : '#15803d',
+              padding: '4px 10px',
+              borderRadius: '6px',
+              fontSize: '11px',
+              fontFamily: 'system-ui, -apple-system, sans-serif',
+              border: '1px solid rgba(34,197,94,0.3)',
+              opacity: 0.9,
+            }}>
+              <code>{e.sessionId.substring(0, 6)}</code> · {e.action}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Canvas - Full Screen */}
       <div className="canvas-container">
         <Excalidraw
+          key={sceneVersion}
           excalidrawAPI={(api: ExcalidrawAPIRefValue) => setExcalidrawAPI(api)}
-          initialData={restoredData}
+          initialData={pendingScene || restoredData}
           renderTopRightUI={renderTopRightUI}
           onChange={handleOnChange}
         >

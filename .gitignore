@@ -20,6 +20,10 @@ public/dist/
 
 docs/
 
+# Test/debug screenshots
+*.png
+.playwright-mcp/
+
 # Package manager lockfiles (keep bun.lock)
 package-lock.json
 yarn.lock

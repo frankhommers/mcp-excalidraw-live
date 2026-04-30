@@ -165,6 +165,8 @@ export type WebSocketMessageType =
   | 'mcp_delete_element'
   | 'mcp_query_elements'
   | 'mcp_batch_create'
+  | 'mcp_restore_elements'
+  | 'mcp_load_scene'
   | 'mcp_clear_canvas'
   | 'mcp_get_element'
   | 'mcp_set_viewport'
@@ -176,7 +178,108 @@ export type WebSocketMessageType =
   | 'pin_status'
   | 'export_to_excalidraw_url'
   | 'client_focus'
-  | 'client_pin';
+  | 'client_pin'
+  // v3.0.0 multi-canvas messages
+  | 'canvas_assigned'
+  | 'canvas_rename'
+  | 'canvas_state'
+  | 'session_pending'
+  | 'session_granted'
+  | 'session_revoked'
+  | 'grant_request'
+  | 'revoke_grant'
+  | 'activity'
+  | 'session_ended';
+
+// v3.0.0 — Multi-canvas, multi-session model
+
+export interface SessionInfo {
+  sessionId: string;
+  clientName?: string;        // from MCP clientInfo.name
+  clientVersion?: string;     // from MCP clientInfo.version
+  purpose: string;            // declared via request_canvas
+  createdAt: string;
+}
+
+export interface CanvasInfo {
+  canvasId: string;
+  name: string;
+  createdAt: string;
+}
+
+export interface GrantInfo {
+  sessionId: string;
+  canvasId: string;
+  grantedAt: string;
+}
+
+// Server -> browser: complete state snapshot for this canvas
+export interface CanvasStateMessage extends WebSocketMessage {
+  type: 'canvas_state';
+  canvas: CanvasInfo;
+  pendingSessions: Array<SessionInfo>;     // global pending pool, all canvases see all
+  grants: Array<GrantInfo & { session: SessionInfo }>;  // grants ON THIS canvas
+}
+
+// Server -> browser: assigned this socket a canvasId on connect
+export interface CanvasAssignedMessage extends WebSocketMessage {
+  type: 'canvas_assigned';
+  canvasId: string;
+  name: string;
+}
+
+// Browser -> server: rename this canvas
+export interface CanvasRenameMessage extends WebSocketMessage {
+  type: 'canvas_rename';
+  name: string;
+}
+
+// Server -> all browsers: a session is now waiting (badge update)
+export interface SessionPendingMessage extends WebSocketMessage {
+  type: 'session_pending';
+  session: SessionInfo;
+}
+
+// Server -> all browsers: pending session removed (granted/cancelled)
+export interface SessionEndedMessage extends WebSocketMessage {
+  type: 'session_ended';
+  sessionId: string;
+}
+
+// Server -> specific browser: new grant on this canvas
+export interface SessionGrantedMessage extends WebSocketMessage {
+  type: 'session_granted';
+  grant: GrantInfo;
+  session: SessionInfo;
+}
+
+// Server -> specific browser: grant removed
+export interface SessionRevokedMessage extends WebSocketMessage {
+  type: 'session_revoked';
+  sessionId: string;
+  canvasId: string;
+}
+
+// Browser -> server: human grants this session to this canvas
+export interface GrantRequestMessage extends WebSocketMessage {
+  type: 'grant_request';
+  sessionId: string;
+  canvasId: string;  // must match this browser's canvasId
+}
+
+// Browser -> server: human revokes a grant
+export interface RevokeGrantMessage extends WebSocketMessage {
+  type: 'revoke_grant';
+  sessionId: string;
+  canvasId: string;
+}
+
+// Server -> browser: activity hint (for toast)
+export interface ActivityMessage extends WebSocketMessage {
+  type: 'activity';
+  sessionId: string;
+  action: string;   // free-form, e.g. "create_element", "batch_create:5"
+}
 
 export interface WebSocketMessage {
   type: WebSocketMessageType;
@@ -309,4 +412,24 @@ export function validateElement(element: Partial<ServerElement>): element is Ser
 // Helper function to generate unique IDs
 export function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).substring(2);
+}
+
+// Normalize fontFamily from string names or numeric strings to numeric values.
+// Excalidraw uses: 1=Virgil(hand), 2=Helvetica(sans), 3=Cascadia(mono),
+// 5=Excalifont, 6=Nunito, 7=Lilita One, 8=Comic Shanns.
+// Returns undefined if input is undefined or not recognised.
+export function normalizeFontFamily(fontFamily: string | number | undefined): number | undefined {
+  if (fontFamily === undefined || fontFamily === null) return undefined;
+  if (typeof fontFamily === 'number') return fontFamily;
+  const map: Record<string, number> = {
+    'virgil': 1, 'hand': 1, 'handwritten': 1,
+    'helvetica': 2, 'sans': 2, 'sans-serif': 2,
+    'cascadia': 3, 'mono': 3, 'monospace': 3,
+    'excalifont': 5,
+    'nunito': 6,
+    'lilita': 7, 'lilita one': 7,
+    'comic shanns': 8, 'comic': 8,
+    '1': 1, '2': 2, '3': 3, '5': 5, '6': 6, '7': 7, '8': 8,
+  };
+  return map[String(fontFamily).toLowerCase()];
 }

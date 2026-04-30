@@ -1,7 +1,7 @@
 {
   "name": "mcp-excalidraw-live",
-  "version": "2.0.0",
-  "description": "Live Excalidraw canvas with MCP Streamable HTTP — 21 tools, real-time sync, browser-side state",
+  "version": "3.0.0",
+  "description": "Live Excalidraw canvas with MCP Streamable HTTP — multi-agent multi-canvas, human-grant model, real-time sync",
   "main": "dist/server.js",
   "type": "module",
   "scripts": {
@@ -14,32 +14,32 @@
     "type-check": "bunx tsc --noEmit"
   },
   "dependencies": {
-    "@excalidraw/excalidraw": "^0.18.0",
-    "@excalidraw/mermaid-to-excalidraw": "^2.1.1",
-    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@excalidraw/excalidraw": "0.18.1",
+    "@excalidraw/mermaid-to-excalidraw": "^2.2.2",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "cors": "^2.8.6",
-    "dotenv": "^17.3.1",
+    "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "mermaid": "^11.13.0",
+    "mermaid": "^11.14.0",
     "pako": "^2.1.0",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
     "winston": "^3.19.0",
     "ws": "^8.20.0",
-    "zod": "^4.3.6"
+    "zod": "^4.4.1"
   },
   "devDependencies": {
-    "@types/cors": "^2.8.17",
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
-    "@types/node": "^25.5.0",
+    "@types/node": "^25.6.0",
     "@types/pako": "^2.0.4",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "@types/ws": "^8.5.10",
-    "@vitejs/plugin-react": "^5.2.0",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^6.0.1",
     "concurrently": "^9.2.1",
-    "typescript": "^5.9.3",
-    "vite": "^8.0.1"
+    "typescript": "^6.0.3",
+    "vite": "^8.0.10"
   },
   "keywords": [
     "mcp",
