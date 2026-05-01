@@ -1263,6 +1263,28 @@ function App(): React.JSX.Element {
 
     return (
       <div style={barStyle}>
+        {/* Canvas identity (always visible, click to copy) */}
+        {canvas && (
+          <div
+            onClick={async () => {
+              try { await navigator.clipboard.writeText(canvas.canvasId) } catch {}
+            }}
+            title={`Click to copy canvasId\n${canvas.canvasId}`}
+            style={{
+              fontSize: '12px',
+              fontFamily: 'monospace',
+              padding: '2px 8px',
+              borderRadius: '4px',
+              background: isDarkMode ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
+              color: isDarkMode ? '#ddd' : '#333',
+              cursor: 'pointer',
+              maxWidth: '240px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >{canvas.name} <span style={{ opacity: 0.5 }}>·</span> <span style={{ opacity: 0.7 }}>{canvas.canvasId.substring(0, 8)}</span></div>
+        )}
         {/* Server */}
         <div style={{ ...iconStyle, color: getColor(isConnected, '#22c55e') }} title={isConnected ? 'Server Connected' : 'Disconnected'}>
           {isConnected ? <CloudOn /> : <CloudOff />}
@@ -1485,7 +1507,22 @@ function App(): React.JSX.Element {
                 title="Click to rename"
               >{canvas.name}</span>
             )}
-            <span style={{ marginLeft: 'auto', fontSize: '11px', opacity: 0.55 }}>{canvas.canvasId.substring(0, 8)}</span>
+            <span
+              onClick={async () => {
+                try { await navigator.clipboard.writeText(canvas.canvasId) } catch {}
+              }}
+              title={`Click to copy full canvasId\n${canvas.canvasId}`}
+              style={{
+                marginLeft: 'auto',
+                fontSize: '11px',
+                opacity: 0.7,
+                fontFamily: 'monospace',
+                cursor: 'pointer',
+                padding: '1px 6px',
+                borderRadius: '3px',
+                background: isDarkMode ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
+              }}
+            >{canvas.canvasId}</span>
             <button
               onClick={() => setIsHeaderExpanded(false)}
               style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: '16px', padding: '0 4px', opacity: 0.5 }}
