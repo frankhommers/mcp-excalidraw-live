@@ -483,31 +483,64 @@ function createMcpServer(): McpServerHandle {
   // === v3 multi-canvas tools ===
 
   mcpServer.registerTool('request_canvas', {
-    description: 'CALL THIS FIRST before any drawing tool. Requests access to a canvas; a human operator grants access via the canvas dashboard in their browser. Blocks for up to 5 seconds; returns {status: "granted", canvasId, name} or {status: "pending"} — if pending, tell the user to grant access in the browser, then call again. Without an active grant, all element/canvas tools fail.',
+    description: 'CALL THIS FIRST before any drawing tool. Requests access to a canvas; a human operator grants access via the canvas dashboard in their browser. Optionally specify canvasName or canvasId to request a specific canvas (otherwise human picks). Blocks for up to 5 seconds; returns {status: "granted", canvasId, name} or {status: "pending"} — if pending, tell the user to grant access in the browser, then call again. Without an active grant, all element/canvas tools fail.',
     inputSchema: {
       purpose: z.string().min(1).describe('Short description of why you need a canvas (e.g. "draw auth flow"). Required so the human can decide which canvas to grant.'),
+      canvasName: z.string().optional().describe('Optional: request access to a canvas with this exact name (use list_my_canvases to see available names).'),
+      canvasId: z.string().optional().describe('Optional: request access to a specific canvasId (use list_my_canvases to see available ids).'),
     }
-  }, async ({ purpose }): Promise<CallToolResult> => {
+  }, async ({ purpose, canvasName, canvasId }): Promise<CallToolResult> => {
     try {
       const session = sessions.get(sessionId);
       if (!session) {
         return { content: [{ type: 'text', text: 'Error: session not initialized' }], isError: true };
       }
-      session.purpose = purpose;
 
-      // If session already has a grant, just return the active one
+      // Resolve specific canvas target if requested
+      let targetCanvas: CanvasEntry | null = null;
+      if (canvasId) {
+        targetCanvas = canvases.get(canvasId) || null;
+        if (!targetCanvas) {
+          return {
+            content: [{ type: 'text', text: `Error: no canvas with id "${canvasId}". Call list_my_canvases to see available canvases.` }],
+            isError: true
+          };
+        }
+      } else if (canvasName) {
+        targetCanvas = [...canvases.values()].find(c => c.name === canvasName) || null;
+        if (!targetCanvas) {
+          return {
+            content: [{ type: 'text', text: `Error: no canvas with name "${canvasName}". Call list_my_canvases to see available names.` }],
+            isError: true
+          };
+        }
+      }
+
+      // Build display purpose so the dashboard shows the target hint
+      session.purpose = targetCanvas
+        ? `${purpose} (requesting "${targetCanvas.name}")`
+        : purpose;
+
+      // If session already has the requested grant (or any grant when none specified), return it
       const existing = getGrantsForSession(sessionId);
       if (existing.length > 0) {
-        const active = existing.find(g => g.canvasId === session.activeCanvasId) || existing[0]!;
-        const c = canvases.get(active.canvasId);
-        if (c) {
-          session.activeCanvasId = active.canvasId;
-          return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify({ status: 'granted', canvasId: c.canvasId, name: c.name, note: 'Already granted; reusing active canvas.' }, null, 2)
-            }]
-          };
+        let active;
+        if (targetCanvas) {
+          active = existing.find(g => g.canvasId === targetCanvas!.canvasId);
+        } else {
+          active = existing.find(g => g.canvasId === session.activeCanvasId) || existing[0];
+        }
+        if (active) {
+          const c = canvases.get(active.canvasId);
+          if (c) {
+            session.activeCanvasId = active.canvasId;
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ status: 'granted', canvasId: c.canvasId, name: c.name, note: 'Already granted; reusing.' }, null, 2)
+              }]
+            };
+          }
         }
       }
 
@@ -569,26 +602,27 @@ function createMcpServer(): McpServerHandle {
   });
 
   mcpServer.registerTool('list_my_canvases', {
-    description: 'List canvases already granted to this session. Empty list does NOT mean no canvases exist — it means none granted yet. To get access, call request_canvas(purpose) instead.',
+    description: 'List ALL open canvases on the server with grant status for this session. Each entry has {canvasId, name, granted: bool, active: bool}. To use a canvas where granted=false, call request_canvas(purpose, canvasName?) and a human must approve.',
   }, async (): Promise<CallToolResult> => {
     try {
       const session = sessions.get(sessionId);
       if (!session) {
         return { content: [{ type: 'text', text: 'Error: session not initialized' }], isError: true };
       }
-      const myGrants = getGrantsForSession(sessionId)
-        .map(g => {
-          const c = canvases.get(g.canvasId);
-          if (!c) return null;
-          return {
-            canvasId: c.canvasId,
-            name: c.name,
-            isActive: c.canvasId === session.activeCanvasId,
-            grantedAt: g.grantedAt
-          };
-        })
-        .filter(x => x !== null);
-      return { content: [{ type: 'text', text: JSON.stringify({ canvases: myGrants }, null, 2) }] };
+      const grantedSet = new Set(getGrantsForSession(sessionId).map(g => g.canvasId));
+      const list = [...canvases.values()].map(c => ({
+        canvasId: c.canvasId,
+        name: c.name,
+        granted: grantedSet.has(c.canvasId),
+        active: c.canvasId === session.activeCanvasId,
+        createdAt: c.createdAt
+      }));
+      const hint = list.length === 0
+        ? 'No canvases open. A human must open the canvas page in their browser first.'
+        : (grantedSet.size === 0
+          ? 'You have no grants yet. Call request_canvas(purpose, canvasName?) to ask for access.'
+          : undefined);
+      return { content: [{ type: 'text', text: JSON.stringify(hint ? { canvases: list, hint } : { canvases: list }, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }], isError: true };
     }
