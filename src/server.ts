@@ -483,7 +483,7 @@ function createMcpServer(): McpServerHandle {
   // === v3 multi-canvas tools ===
 
   mcpServer.registerTool('request_canvas', {
-    description: 'Request access to a canvas. A human operator must grant access via the canvas dashboard. Blocks for up to 5 seconds; returns either {status: "granted", canvasId, name} or {status: "pending"} — call again later if pending.',
+    description: 'CALL THIS FIRST before any drawing tool. Requests access to a canvas; a human operator grants access via the canvas dashboard in their browser. Blocks for up to 5 seconds; returns {status: "granted", canvasId, name} or {status: "pending"} — if pending, tell the user to grant access in the browser, then call again. Without an active grant, all element/canvas tools fail.',
     inputSchema: {
       purpose: z.string().min(1).describe('Short description of why you need a canvas (e.g. "draw auth flow"). Required so the human can decide which canvas to grant.'),
     }
@@ -569,7 +569,7 @@ function createMcpServer(): McpServerHandle {
   });
 
   mcpServer.registerTool('list_my_canvases', {
-    description: 'List canvases this session has been granted access to.',
+    description: 'List canvases already granted to this session. Empty list does NOT mean no canvases exist — it means none granted yet. To get access, call request_canvas(purpose) instead.',
   }, async (): Promise<CallToolResult> => {
     try {
       const session = sessions.get(sessionId);
