@@ -106,7 +106,7 @@ export interface ExcalidrawBinding {
   fixedPoint?: readonly [number, number] | null;
 }
 
-export type ExcalidrawElementType = 'rectangle' | 'ellipse' | 'diamond' | 'arrow' | 'text' | 'line' | 'freedraw' | 'label';
+export type ExcalidrawElementType = 'rectangle' | 'ellipse' | 'diamond' | 'arrow' | 'text' | 'line' | 'freedraw' | 'label' | 'image';
 
 // Excalidraw element types
 export const EXCALIDRAW_ELEMENT_TYPES: Record<string, ExcalidrawElementType> = {
@@ -117,8 +117,17 @@ export const EXCALIDRAW_ELEMENT_TYPES: Record<string, ExcalidrawElementType> = {
   TEXT: 'text',
   LABEL: 'label',
   FREEDRAW: 'freedraw',
-  LINE: 'line'
+  LINE: 'line',
+  IMAGE: 'image'
 } as const;
+
+// In-memory file storage for image elements
+export interface ExcalidrawFile {
+  id: string;
+  dataURL: string;       // data:<mimeType>;base64,<...>
+  mimeType: string;
+  created: number;
+}
 
 // Server-side element with metadata
 export interface ServerElement extends Omit<ExcalidrawElementBase, 'id'> {
@@ -167,6 +176,8 @@ export type WebSocketMessageType =
   | 'mcp_batch_create'
   | 'mcp_restore_elements'
   | 'mcp_load_scene'
+  | 'mcp_add_files'
+  | 'mcp_delete_file'
   | 'mcp_clear_canvas'
   | 'mcp_get_element'
   | 'mcp_set_viewport'

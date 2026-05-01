@@ -11,7 +11,8 @@
     "build:server": "bunx tsc",
     "dev": "bunx concurrently \"bun run dev:server\" \"bunx vite\"",
     "dev:server": "bunx tsc --watch",
-    "type-check": "bunx tsc --noEmit"
+    "type-check": "bunx tsc --noEmit",
+    "test": "bun test"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "0.18.1",

@@ -19,8 +19,10 @@ import {
   WebSocketMessage,
   SessionInfo,
   CanvasInfo,
-  GrantInfo
+  GrantInfo,
+  ExcalidrawFile
 } from './types.js';
+import { resolveArrowBindings } from './arrow-routing.js';
 import { z } from 'zod';
 import WebSocket from 'ws';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -75,6 +77,7 @@ interface CanvasEntry {
   ws: WebSocket;
   createdAt: string;
   snapshots: Map<string, SnapshotEntry>;  // name -> snapshot
+  files: Map<string, ExcalidrawFile>;     // fileId -> file (for image elements)
 }
 
 interface SessionEntry {
@@ -348,7 +351,8 @@ wss.on('connection', (ws: WebSocket, req) => {
     name: `canvas-${shortId()}`,
     ws,
     createdAt: new Date().toISOString(),
-    snapshots: new Map()
+    snapshots: new Map(),
+    files: new Map()
   };
   canvases.set(canvasId, canvas);
   wsToCanvas.set(ws, canvasId);
@@ -455,108 +459,7 @@ function convertTextToLabel(element: ServerElement): ServerElement {
   return e as ServerElement;
 }
 
-// Compute edge intersection point for an element given a direction toward target.
-// Used to route arrows from shape edge to shape edge instead of center to center.
-function computeEdgePoint(
-  el: any,
-  targetCenterX: number,
-  targetCenterY: number
-): { x: number; y: number } {
-  const cx = (el.x || 0) + (el.width || 0) / 2;
-  const cy = (el.y || 0) + (el.height || 0) / 2;
-  const dx = targetCenterX - cx;
-  const dy = targetCenterY - cy;
-  const hw = (el.width || 0) / 2;
-  const hh = (el.height || 0) / 2;
 
-  if (el.type === 'diamond') {
-    if (dx === 0 && dy === 0) return { x: cx, y: cy + hh };
-    const absDx = Math.abs(dx);
-    const absDy = Math.abs(dy);
-    const denom = absDx / hw + absDy / hh;
-    const scale = denom > 0 ? 1 / denom : 1;
-    return { x: cx + dx * scale, y: cy + dy * scale };
-  }
-
-  if (el.type === 'ellipse') {
-    if (dx === 0 && dy === 0) return { x: cx, y: cy + hh };
-    const angle = Math.atan2(dy, dx);
-    return { x: cx + hw * Math.cos(angle), y: cy + hh * Math.sin(angle) };
-  }
-
-  // Rectangle (default)
-  if (dx === 0 && dy === 0) return { x: cx, y: cy + hh };
-  const angle = Math.atan2(dy, dx);
-  const tanA = Math.tan(angle);
-  if (Math.abs(tanA * hw) <= hh) {
-    const signX = dx >= 0 ? 1 : -1;
-    return { x: cx + signX * hw, y: cy + signX * hw * tanA };
-  } else {
-    const signY = dy >= 0 ? 1 : -1;
-    return { x: cx + signY * hh / tanA, y: cy + signY * hh };
-  }
-}
-
-// Resolve arrow bindings: compute x/y/points so arrows route edge-to-edge.
-// Sets startBinding/endBinding/boundElements so Excalidraw treats them as bound.
-// `start: {id}` and `end: {id}` shortform are read but kept untouched (for ref).
-// `existingElements` allows arrows to reference shapes already on canvas.
-function resolveArrowBindings(batchElements: any[], existingElements: Map<string, any> = new Map()): void {
-  const elementMap = new Map<string, any>(existingElements);
-  for (const el of batchElements) elementMap.set(el.id, el);
-
-  const GAP = 8;
-
-  for (const el of batchElements) {
-    if (el.type !== 'arrow' && el.type !== 'line') continue;
-    const startRef = el.start as { id: string } | undefined;
-    const endRef = el.end as { id: string } | undefined;
-    if (!startRef && !endRef) continue;
-
-    const startEl = startRef ? elementMap.get(startRef.id) : undefined;
-    const endEl = endRef ? elementMap.get(endRef.id) : undefined;
-
-    const startCenter = startEl
-      ? { x: (startEl.x || 0) + (startEl.width || 0) / 2, y: (startEl.y || 0) + (startEl.height || 0) / 2 }
-      : { x: el.x || 0, y: el.y || 0 };
-    const endCenter = endEl
-      ? { x: (endEl.x || 0) + (endEl.width || 0) / 2, y: (endEl.y || 0) + (endEl.height || 0) / 2 }
-      : { x: (el.x || 0) + 100, y: el.y || 0 };
-
-    const startPt = startEl ? computeEdgePoint(startEl, endCenter.x, endCenter.y) : startCenter;
-    const endPt = endEl ? computeEdgePoint(endEl, startCenter.x, startCenter.y) : endCenter;
-
-    const dx = endPt.x - startPt.x;
-    const dy = endPt.y - startPt.y;
-    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-    const finalStart = { x: startPt.x + (dx / dist) * GAP, y: startPt.y + (dy / dist) * GAP };
-    const finalEnd = { x: endPt.x - (dx / dist) * GAP, y: endPt.y - (dy / dist) * GAP };
-
-    el.x = finalStart.x;
-    el.y = finalStart.y;
-    el.width = Math.abs(finalEnd.x - finalStart.x);
-    el.height = Math.abs(finalEnd.y - finalStart.y);
-    el.points = [[0, 0], [finalEnd.x - finalStart.x, finalEnd.y - finalStart.y]];
-
-    // Set bindings — frontend convertToExcalidrawElements ALSO honors `start`/`end` shortform
-    // but we set explicit bindings as belt-and-braces.
-    if (startEl) {
-      el.startBinding = { elementId: startEl.id, focus: 0, gap: GAP };
-      // Mark the source shape as having this arrow bound to it
-      if (!Array.isArray(startEl.boundElements)) startEl.boundElements = [];
-      if (!startEl.boundElements.find((b: any) => b?.id === el.id)) {
-        startEl.boundElements.push({ id: el.id, type: 'arrow' });
-      }
-    }
-    if (endEl) {
-      el.endBinding = { elementId: endEl.id, focus: 0, gap: GAP };
-      if (!Array.isArray(endEl.boundElements)) endEl.boundElements = [];
-      if (!endEl.boundElements.find((b: any) => b?.id === el.id)) {
-        endEl.boundElements.push({ id: el.id, type: 'arrow' });
-      }
-    }
-  }
-}
 
 // ============================================================================
 // MCP Server (per-session)
@@ -803,6 +706,81 @@ function createMcpServer(): McpServerHandle {
     }
   });
 
+  // === Image / file storage tools ===
+
+  mcpServer.registerTool('add_image', {
+    description: 'Upload an image file (PNG, SVG, JPEG, etc) to the canvas storage. Returns a fileId you can use as `fileId` on a `create_element({type: "image", ...})` call. Send raw base64 (no data URL prefix).',
+    inputSchema: {
+      data: z.string().min(1).describe('Base64-encoded file bytes (no "data:..." prefix)'),
+      mimeType: z.string().min(1).describe('MIME type, e.g. "image/png" or "image/svg+xml"'),
+    }
+  }, async ({ data, mimeType }): Promise<CallToolResult> => {
+    try {
+      const canvas = getActiveCanvas();
+      if (!canvas) {
+        return { content: [{ type: 'text', text: 'Error: no active canvas; call request_canvas first' }], isError: true };
+      }
+      const fileId = generateId();
+      const file: ExcalidrawFile = {
+        id: fileId,
+        dataURL: `data:${mimeType};base64,${data}`,
+        mimeType,
+        created: Date.now()
+      };
+      canvas.files.set(fileId, file);
+      // Push to browser so any image element with this fileId renders immediately
+      await sendMcpOperation(sessionId, { type: 'mcp_add_files', files: [file] });
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ fileId, mimeType, sizeBytes: Math.floor(data.length * 0.75) }, null, 2)
+        }]
+      };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }], isError: true };
+    }
+  });
+
+  mcpServer.registerTool('list_images', {
+    description: 'List all uploaded image fileIds available on the active canvas.',
+  }, async (): Promise<CallToolResult> => {
+    try {
+      const canvas = getActiveCanvas();
+      if (!canvas) {
+        return { content: [{ type: 'text', text: 'Error: no active canvas; call request_canvas first' }], isError: true };
+      }
+      const list = [...canvas.files.values()].map(f => ({
+        fileId: f.id,
+        mimeType: f.mimeType,
+        created: new Date(f.created).toISOString()
+      }));
+      return { content: [{ type: 'text', text: JSON.stringify({ files: list }, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }], isError: true };
+    }
+  });
+
+  mcpServer.registerTool('delete_image', {
+    description: 'Delete an uploaded image from canvas storage. Image elements still referencing it will fail to render.',
+    inputSchema: {
+      fileId: z.string(),
+    }
+  }, async ({ fileId }): Promise<CallToolResult> => {
+    try {
+      const canvas = getActiveCanvas();
+      if (!canvas) {
+        return { content: [{ type: 'text', text: 'Error: no active canvas; call request_canvas first' }], isError: true };
+      }
+      const removed = canvas.files.delete(fileId);
+      if (removed) {
+        await sendMcpOperation(sessionId, { type: 'mcp_delete_file', fileId });
+      }
+      return { content: [{ type: 'text', text: JSON.stringify({ deleted: removed, fileId }, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }], isError: true };
+    }
+  });
+
   mcpServer.registerTool('list_snapshots', {
     description: 'List all named snapshots saved on the active canvas.',
   }, async (): Promise<CallToolResult> => {
@@ -825,7 +803,7 @@ function createMcpServer(): McpServerHandle {
   // === Existing tools (now route via session->canvas) ===
 
   mcpServer.registerTool('create_element', {
-    description: 'Create a new Excalidraw element. For arrows, use startElementId/endElementId to bind arrows to shapes — Excalidraw auto-routes from edge to edge. Assign custom id to shapes so arrows can reference them.',
+    description: 'Create a new Excalidraw element. For arrows, use startElementId/endElementId to bind arrows to shapes — Excalidraw auto-routes from edge to edge. For images, first call add_image to get a fileId, then create_element({type: "image", fileId, x, y, width, height}).',
     inputSchema: {
       type: z.enum(Object.values(EXCALIDRAW_ELEMENT_TYPES) as [ExcalidrawElementType, ...ExcalidrawElementType[]]),
       x: z.number(),
@@ -847,6 +825,9 @@ function createMcpServer(): McpServerHandle {
       endElementId: z.string().optional().describe('For arrows: id of element to bind arrow end to. Auto-routes to element edge.'),
       startArrowhead: z.string().optional().describe('Arrowhead at start: arrow|bar|dot|triangle|null'),
       endArrowhead: z.string().optional().describe('Arrowhead at end: arrow|bar|dot|triangle|null'),
+      fileId: z.string().optional().describe('For image elements: id returned by add_image'),
+      status: z.enum(['saved', 'pending']).optional().describe('For image elements: defaults to "saved"'),
+      scale: z.array(z.number()).length(2).optional().describe('For image elements: [scaleX, scaleY], defaults to [1, 1]'),
     }
   }, async (args): Promise<CallToolResult> => {
     try {
@@ -934,15 +915,37 @@ function createMcpServer(): McpServerHandle {
   });
 
   mcpServer.registerTool('query_elements', {
-    description: 'Get raw element data (IDs, coordinates, properties) for programmatic manipulation. Use export_canvas instead if you want to SEE what is on the canvas.',
+    description: 'Get raw element data (IDs, coordinates, properties) for programmatic manipulation. Use export_canvas instead if you want to SEE what is on the canvas. Supports bbox filter to limit results to a region of the canvas.',
     inputSchema: {
       type: z.enum(Object.values(EXCALIDRAW_ELEMENT_TYPES) as [ExcalidrawElementType, ...ExcalidrawElementType[]]).optional(),
+      bbox: z.object({
+        x_min: z.number().optional(),
+        x_max: z.number().optional(),
+        y_min: z.number().optional(),
+        y_max: z.number().optional(),
+      }).optional().describe('Only return elements whose origin (x, y) falls within this range'),
     }
   }, async (args): Promise<CallToolResult> => {
     try {
       const filter = args.type ? { type: args.type } : undefined;
       const result = await sendMcpOperation(sessionId, { type: 'mcp_query_elements', filter });
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      let elements = Array.isArray(result) ? result : [];
+
+      // Apply bbox filter server-side
+      if (args.bbox) {
+        const { x_min, x_max, y_min, y_max } = args.bbox;
+        elements = elements.filter((el: any) => {
+          const x = el.x ?? 0;
+          const y = el.y ?? 0;
+          if (x_min !== undefined && x < x_min) return false;
+          if (x_max !== undefined && x > x_max) return false;
+          if (y_min !== undefined && y < y_min) return false;
+          if (y_max !== undefined && y > y_max) return false;
+          return true;
+        });
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify(elements, null, 2) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `Error: ${(error as Error).message}` }], isError: true };
     }

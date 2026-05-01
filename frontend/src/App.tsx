@@ -199,6 +199,31 @@ const validateAndFixBindings = (elements: ExcalidrawElementSkeleton[]): Excalidr
   });
 }
 
+// Re-center text elements bound to shape containers after convertToExcalidrawElements,
+// which sometimes leaves them at the input x/y instead of the container center.
+const isShapeContainerType = (type?: string): boolean =>
+  type === 'rectangle' || type === 'ellipse' || type === 'diamond'
+
+const recenterBoundShapeTextElements = (elements: any[]): any[] => {
+  const elementMap = new Map<string, any>(elements.map(el => [el.id, el]))
+  return elements.map((element) => {
+    if (element.type !== 'text' || !element.containerId) return element
+    const container = elementMap.get(element.containerId)
+    if (!container || !isShapeContainerType(container.type)) return element
+    if (element.autoResize === false) return element
+    if (
+      typeof container.x !== 'number' || typeof container.y !== 'number' ||
+      typeof container.width !== 'number' || typeof container.height !== 'number' ||
+      typeof element.width !== 'number' || typeof element.height !== 'number'
+    ) return element
+    return {
+      ...element,
+      x: container.x + (container.width - element.width) / 2,
+      y: container.y + (container.height - element.height) / 2,
+    }
+  })
+}
+
 // convertToExcalidrawElements strips startBinding/endBinding/boundElements props.
 // Restore them from original elements after conversion. Required for snapshot restore
 // and for arrows created via API with startBinding/endBinding fields.
@@ -409,11 +434,12 @@ function App(): React.JSX.Element {
       const validatedElements = validateAndFixBindings(cleanedElements)
       const convertedElements = convertToExcalidrawElements(validatedElements, { regenerateIds: false })
       const restoredElements = restoreBindings(convertedElements, validatedElements as any[])
+      const recentered = recenterBoundShapeTextElements(restoredElements)
       api.updateScene({
-        elements: [...currentElements, ...restoredElements],
+        elements: [...currentElements, ...recentered],
         captureUpdate: CaptureUpdateAction.IMMEDIATELY
       })
-      sendMcpResponse(requestId, true, restoredElements)
+      sendMcpResponse(requestId, true, recentered)
     } catch (error) {
       sendMcpResponse(requestId, false, undefined, (error as Error).message)
     }
@@ -448,17 +474,38 @@ function App(): React.JSX.Element {
 
       const converted = convertToExcalidrawElements(skeletonElements, { regenerateIds: false })
       const restored = restoreBindings(converted, rawElements)
+      const recentered = recenterBoundShapeTextElements(restored)
 
       setPendingScene({
-        elements: restored as readonly ExcalidrawElement[],
+        elements: recentered as readonly ExcalidrawElement[],
         appState: { theme: appState.theme || 'light', viewBackgroundColor: appState.viewBackgroundColor || '#ffffff' },
         files
       })
       setSceneVersion(v => v + 1)
-      sendMcpResponse(requestId, true, { loaded: restored.length })
+      sendMcpResponse(requestId, true, { loaded: recentered.length })
     } catch (error) {
       sendMcpResponse(requestId, false, undefined, (error as Error).message)
     }
+  }, [sendMcpResponse])
+
+  const handleMcpAddFiles = useCallback((requestId: string, files: any[]) => {
+    const api = excalidrawAPIRef.current
+    if (!api) {
+      sendMcpResponse(requestId, false, undefined, 'Excalidraw not initialized')
+      return
+    }
+    try {
+      api.addFiles(files)
+      sendMcpResponse(requestId, true, { added: files.length })
+    } catch (error) {
+      sendMcpResponse(requestId, false, undefined, (error as Error).message)
+    }
+  }, [sendMcpResponse])
+
+  const handleMcpDeleteFile = useCallback((requestId: string, _fileId: string) => {
+    // Excalidraw API has no public file-delete; element using the file just stops rendering when fileId is gone.
+    // We acknowledge the request so server can clean up its own map.
+    sendMcpResponse(requestId, true, { ok: true })
   }, [sendMcpResponse])
 
   const handleMcpClearCanvas = useCallback((requestId: string) => {
@@ -544,6 +591,20 @@ function App(): React.JSX.Element {
         if (data.requestId && typeof (data as any).scene === 'string') {
           flashMcpActivity()
           handleMcpLoadScene(data.requestId, (data as any).scene)
+        }
+        break
+
+      case 'mcp_add_files':
+        if (data.requestId && Array.isArray((data as any).files)) {
+          flashMcpActivity()
+          handleMcpAddFiles(data.requestId, (data as any).files)
+        }
+        break
+
+      case 'mcp_delete_file':
+        if (data.requestId && typeof (data as any).fileId === 'string') {
+          flashMcpActivity()
+          handleMcpDeleteFile(data.requestId, (data as any).fileId)
         }
         break
 
@@ -906,7 +967,7 @@ function App(): React.JSX.Element {
         }
         break
     }
-  }, [flashMcpActivity, handleMcpCreateElement, handleMcpUpdateElement, handleMcpDeleteElement, handleMcpQueryElements, handleMcpBatchCreate, handleMcpLoadScene, handleMcpClearCanvas])
+  }, [flashMcpActivity, handleMcpCreateElement, handleMcpUpdateElement, handleMcpDeleteElement, handleMcpQueryElements, handleMcpBatchCreate, handleMcpLoadScene, handleMcpAddFiles, handleMcpDeleteFile, handleMcpClearCanvas])
 
   // WebSocket connection
   useEffect(() => {

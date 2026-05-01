@@ -39,8 +39,8 @@
     "node_modules",
     "dist",
     "frontend",
-    "**/*.test.ts",
-    "**/*.spec.ts",
+    "src/**/*.test.ts",
+    "src/**/*.spec.ts",
     "**/*.js",
     "**/*.jsx"
   ],
